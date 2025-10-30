@@ -36,6 +36,9 @@ import android.app.job.JobInfo;
 import android.app.job.JobScheduler;
 import android.content.ComponentName;
 import android.util.Log;
+import android.app.ActivityManager;
+import android.graphics.Bitmap;
+import android.graphics.Color;
 
 public class MainActivity extends AppCompatActivity {
 
@@ -44,6 +47,8 @@ public class MainActivity extends AppCompatActivity {
     ValueCallback<Uri> mFilePathCallback;
     ValueCallback<Uri[]> mFilePathCallbackArray;
     private static final int JOB_ID = 100;
+    private String startUrl = null;
+    private String pageTitle = "";
 
     @SuppressLint("SetJavaScriptEnabled")
     @Override
@@ -55,7 +60,13 @@ public class MainActivity extends AppCompatActivity {
         //WebView加载页面
         webView = findViewById(R.id.web_view);
         webView.getSettings().setJavaScriptEnabled(true);
-        webView.setWebViewClient(new WebViewClient());
+
+        // 启用并持久化 Cookie，包括第三方 Cookie（API 21+）
+        CookieManager cookieManager = CookieManager.getInstance();
+        cookieManager.setAcceptCookie(true);
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+            cookieManager.setAcceptThirdPartyCookies(webView, true);
+        }
         // code from https://blog.csdn.net/qq_21138819/article/details/56676007 by 欢子-3824
         webView.setWebChromeClient(new WebChromeClient() {
             // Andorid 4.1----4.4
@@ -86,6 +97,20 @@ public class MainActivity extends AppCompatActivity {
                 Intent intent = new Intent(Intent.ACTION_PICK);
                 intent.setType("*/*");
                 startActivityForResult(intent, PICK_REQUEST);
+            }
+
+            @Override
+            public void onReceivedTitle(WebView view, String title) {
+                super.onReceivedTitle(view, title);
+                pageTitle = title != null ? title : "";
+            }
+
+            @Override
+            public void onReceivedIcon(WebView view, Bitmap icon) {
+                super.onReceivedIcon(view, icon);
+                if (icon != null) {
+                    updateTaskIcon(icon, pageTitle);
+                }
             }
         });
 
@@ -133,29 +158,43 @@ public class MainActivity extends AppCompatActivity {
 
         });
 
-        //该方法解决的问题是打开浏览器不调用系统浏览器，直接用 webView 打开
+        // 使用自定义 WebViewClient：拦截跳转并在页面加载完成时恢复 sessionStorage
         webView.setWebViewClient(new WebViewClient() {
             @Override
             public boolean shouldOverrideUrlLoading(WebView view, String url) {
                 view.loadUrl(url);
                 return true;
             }
+
+            @Override
+            public void onPageFinished(WebView view, String url) {
+                super.onPageFinished(view, url);
+                // 从 localStorage 恢复 sessionStorage（跨进程/重启保持登录状态）
+                // 仅恢复以特定前缀保存的键，避免干扰站点自身的 localStorage
+                String jsRestore = "(function(){try{var P='__WEBVIEW_SESSION__';for(var i=0;i<localStorage.length;i++){var k=localStorage.key(i);if(k&&k.indexOf(P)===0){var kk=k.substring(P.length);var v=localStorage.getItem(k);sessionStorage.setItem(kk,v);}}}catch(e){}})()";
+                view.loadUrl("javascript:" + jsRestore);
+            }
         });
 
-        // 这里填你需要打包的 H5 页面链接
-        webView.loadUrl("https://zh.xhamster.com/");
+        // 这里填你需要打包的 H5 页面链接，支持从 Intent 动态指定
+        startUrl = getIntent() != null ? getIntent().getStringExtra("START_URL") : null;
+        if (startUrl == null || startUrl.isEmpty()) {
+            startUrl = "https://zh.xhamster.com/";
+        }
+        webView.loadUrl(startUrl);
 
         //显示一些小图片（头像）
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
             webView.getSettings().setMixedContentMode(WebSettings.MIXED_CONTENT_ALWAYS_ALLOW);
         }
-        // 允许使用 localStorage sessionStorage
+        // 允许使用 localStorage / sessionStorage，并启用数据库存储
         webView.getSettings().setDomStorageEnabled(true);
+        webView.getSettings().setDatabaseEnabled(true);
         // 是否支持 html 的 meta 标签
         webView.getSettings().setUseWideViewPort(true);
         webView.getSettings().setAllowFileAccess(true);
-        webView.getSettings().getAllowUniversalAccessFromFileURLs();
-        webView.getSettings().getAllowFileAccessFromFileURLs();
+        webView.getSettings().setAllowUniversalAccessFromFileURLs(true);
+        webView.getSettings().setAllowFileAccessFromFileURLs(true);
         webView.getSettings().setJavaScriptEnabled(true);
         webView.getSettings().setMediaPlaybackRequiresUserGesture(false);
 
@@ -166,6 +205,31 @@ public class MainActivity extends AppCompatActivity {
             "audio.load();" +
             "})()");
     }
+
+    @Override
+    protected void onPause() {
+        super.onPause();
+        if (webView != null) {
+            // 将 sessionStorage 备份到 localStorage（带前缀），实现会话跨进程/重启恢复
+            String jsBackup = "(function(){try{var P='__WEBVIEW_SESSION__';for(var i=0;i<sessionStorage.length;i++){var k=sessionStorage.key(i);var v=sessionStorage.getItem(k);localStorage.setItem(P + k, v);}}catch(e){}})()";
+            webView.loadUrl("javascript:" + jsBackup);
+        }
+    }
+
+    private void updateTaskIcon(Bitmap icon, String title) {
+        try {
+            int primaryColor = Color.parseColor("#222222");
+            ActivityManager.TaskDescription td = new ActivityManager.TaskDescription(
+                    title != null && !title.isEmpty() ? title : getString(R.string.app_name),
+                    icon,
+                    primaryColor
+            );
+            setTaskDescription(td);
+        } catch (Throwable t) {
+            Log.w("MainActivity", "updateTaskIcon failed", t);
+        }
+    }
+
 
     //设置回退页面
     public boolean onKeyDown(int keyCode, KeyEvent event) {
