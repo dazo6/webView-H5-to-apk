@@ -39,6 +39,7 @@ import android.util.Log;
 import android.app.ActivityManager;
 import android.graphics.Bitmap;
 import android.graphics.Color;
+import android.content.pm.ActivityInfo;
 import android.view.View;
 import android.view.ViewGroup;
 import android.widget.FrameLayout;
@@ -172,16 +173,21 @@ public class MainActivity extends AppCompatActivity {
                 // 添加自定义视图到全屏容器
                 fullscreenContainer.addView(customView);
                 
-                // 将全屏容器添加到根布局
-                ViewGroup rootView = (ViewGroup) findViewById(android.R.id.content);
-                rootView.addView(fullscreenContainer);
-                
-                // 隐藏状态栏和导航栏
-                getWindow().getDecorView().setSystemUiVisibility(
-                    View.SYSTEM_UI_FLAG_FULLSCREEN |
-                    View.SYSTEM_UI_FLAG_HIDE_NAVIGATION |
-                    View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY);
-            }
+             // 将全屏容器添加到根布局
+             ViewGroup rootView = (ViewGroup) findViewById(android.R.id.content);
+             rootView.addView(fullscreenContainer);
+             
+             // 隐藏状态栏和导航栏
+             getWindow().getDecorView().setSystemUiVisibility(
+                 View.SYSTEM_UI_FLAG_FULLSCREEN |
+                 View.SYSTEM_UI_FLAG_HIDE_NAVIGATION |
+                 View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY);
+
+             // 进入全屏时强制横屏
+             try {
+                 setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE);
+             } catch (Throwable ignored) {}
+         }
 
             @Override
             public void onHideCustomView() {
@@ -199,16 +205,21 @@ public class MainActivity extends AppCompatActivity {
                     fullscreenContainer.removeView(customView);
                 }
                 
-                // 恢复系统UI
-                getWindow().getDecorView().setSystemUiVisibility(View.SYSTEM_UI_FLAG_VISIBLE);
-                
-                // 清理
-                customView = null;
-                if (customViewCallback != null) {
-                    customViewCallback.onCustomViewHidden();
-                    customViewCallback = null;
-                }
-            }
+             // 恢复系统UI
+             getWindow().getDecorView().setSystemUiVisibility(View.SYSTEM_UI_FLAG_VISIBLE);
+             
+             // 退出全屏时恢复方向
+             try {
+                 setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED);
+             } catch (Throwable ignored) {}
+             
+             // 清理
+             customView = null;
+             if (customViewCallback != null) {
+                 customViewCallback.onCustomViewHidden();
+                 customViewCallback = null;
+             }
+         }
         });
 
         // wevView监听 H5 页面的下载事件
