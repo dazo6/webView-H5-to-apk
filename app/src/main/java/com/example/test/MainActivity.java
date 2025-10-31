@@ -39,6 +39,15 @@ import android.util.Log;
 import android.app.ActivityManager;
 import android.graphics.Bitmap;
 import android.graphics.Color;
+import android.view.View;
+import android.view.ViewGroup;
+import android.widget.FrameLayout;
+import android.webkit.WebResourceRequest;
+import android.webkit.WebResourceResponse;
+import java.io.ByteArrayInputStream;
+import java.util.HashSet;
+import java.util.Set;
+import java.util.Arrays;
 
 public class MainActivity extends AppCompatActivity {
 
@@ -49,6 +58,30 @@ public class MainActivity extends AppCompatActivity {
     private static final int JOB_ID = 100;
     private String startUrl = null;
     private String pageTitle = "";
+    
+    // 全屏视频播放相关字段
+    private View customView;
+    private WebChromeClient.CustomViewCallback customViewCallback;
+    private FrameLayout fullscreenContainer;
+    // 广告拦截开关与域名列表
+    private boolean enableAdBlock = false;
+    private static final Set<String> AD_HOSTS = new HashSet<>(Arrays.asList(
+        "doubleclick.net",
+        "googleads.g.doubleclick.net",
+        "googleadservices.com",
+        "pagead2.googlesyndication.com",
+        "securepubads.g.doubleclick.net",
+        "adservice.google.com",
+        "adservice.google.cn",
+        "ads.yahoo.com",
+        "ads-twitter.com",
+        "adserver",
+        "admob.com",
+        "facebook.com/tr",
+        "advertising",
+        "adservice",
+        "googlesyndication.com"
+    ));
 
     @SuppressLint("SetJavaScriptEnabled")
     @Override
@@ -112,6 +145,70 @@ public class MainActivity extends AppCompatActivity {
                     updateTaskIcon(icon, pageTitle);
                 }
             }
+
+            // 全屏视频播放支持
+            @Override
+            public void onShowCustomView(View view, CustomViewCallback callback) {
+                if (customView != null) {
+                    onHideCustomView();
+                    return;
+                }
+                
+                customView = view;
+                customViewCallback = callback;
+                
+                // 创建全屏容器
+                if (fullscreenContainer == null) {
+                    fullscreenContainer = new FrameLayout(MainActivity.this);
+                    fullscreenContainer.setLayoutParams(new FrameLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                        ViewGroup.LayoutParams.MATCH_PARENT));
+                    fullscreenContainer.setBackgroundColor(Color.BLACK);
+                }
+                
+                // 隐藏 WebView
+                webView.setVisibility(View.GONE);
+                
+                // 添加自定义视图到全屏容器
+                fullscreenContainer.addView(customView);
+                
+                // 将全屏容器添加到根布局
+                ViewGroup rootView = (ViewGroup) findViewById(android.R.id.content);
+                rootView.addView(fullscreenContainer);
+                
+                // 隐藏状态栏和导航栏
+                getWindow().getDecorView().setSystemUiVisibility(
+                    View.SYSTEM_UI_FLAG_FULLSCREEN |
+                    View.SYSTEM_UI_FLAG_HIDE_NAVIGATION |
+                    View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY);
+            }
+
+            @Override
+            public void onHideCustomView() {
+                if (customView == null) {
+                    return;
+                }
+                
+                // 显示 WebView
+                webView.setVisibility(View.VISIBLE);
+                
+                // 移除全屏容器
+                ViewGroup rootView = (ViewGroup) findViewById(android.R.id.content);
+                if (fullscreenContainer != null) {
+                    rootView.removeView(fullscreenContainer);
+                    fullscreenContainer.removeView(customView);
+                }
+                
+                // 恢复系统UI
+                getWindow().getDecorView().setSystemUiVisibility(View.SYSTEM_UI_FLAG_VISIBLE);
+                
+                // 清理
+                customView = null;
+                if (customViewCallback != null) {
+                    customViewCallback.onCustomViewHidden();
+                    customViewCallback = null;
+                }
+            }
         });
 
         // wevView监听 H5 页面的下载事件
@@ -164,6 +261,21 @@ public class MainActivity extends AppCompatActivity {
             public boolean shouldOverrideUrlLoading(WebView view, String url) {
                 view.loadUrl(url);
                 return true;
+            }
+
+            // API >= 21 的拦截
+            @Override
+            public WebResourceResponse shouldInterceptRequest(WebView view, WebResourceRequest request) {
+                try {
+                    if (!enableAdBlock || request == null) return super.shouldInterceptRequest(view, request);
+                    Uri uri = request.getUrl();
+                    if (isAdUrl(uri)) {
+                        return emptyResponse();
+                    }
+                } catch (Throwable t) {
+                    // 忽略错误，继续默认加载
+                }
+                return super.shouldInterceptRequest(view, request);
             }
 
             @Override
@@ -230,14 +342,68 @@ public class MainActivity extends AppCompatActivity {
         }
     }
 
+    // 简单判断是否为广告 URL：匹配域名与路径关键词
+    private boolean isAdUrl(Uri uri) {
+        if (uri == null) return false;
+        String host = uri.getHost();
+        String path = uri.getPath();
+        String url = uri.toString();
+        if (host == null) return false;
+        String h = host.toLowerCase();
+        // 域名命中（包含或全匹配）
+        for (String adHost : AD_HOSTS) {
+            if (h.equals(adHost) || h.endsWith("." + adHost) || h.contains(adHost)) {
+                return true;
+            }
+        }
+        // 路径/URL 关键词命中
+        String p = (path == null ? "" : path.toLowerCase());
+        String u = url.toLowerCase();
+        return (p.contains("/ads/") || p.contains("/ad/") || p.contains("advert") || p.contains("sponsor")
+            || u.contains("/ads?") || u.contains("adservice") || u.contains("pagead") || u.contains("doubleclick"));
+    }
+
+    // 返回一个空响应以阻断资源加载
+    private WebResourceResponse emptyResponse() {
+        return new WebResourceResponse("text/plain", "UTF-8", new ByteArrayInputStream(new byte[0]));
+    }
 
     //设置回退页面
     public boolean onKeyDown(int keyCode, KeyEvent event) {
-        if ((keyCode == KeyEvent.KEYCODE_BACK) && webView.canGoBack()) {
-            webView.goBack();
-            return true;
+        if (keyCode == KeyEvent.KEYCODE_BACK) {
+            // 如果当前处于全屏视频模式，先退出全屏
+            if (customView != null) {
+                exitFullscreenIfNeeded();
+                return true;
+            }
+            // 如果 WebView 可以后退，则后退
+            if (webView.canGoBack()) {
+                webView.goBack();
+                return true;
+            }
         }
         return super.onKeyDown(keyCode, event);
+    }
+
+    // 退出全屏（用于返回键处理）
+    private void exitFullscreenIfNeeded() {
+        if (customView == null) return;
+        // 显示 WebView
+        webView.setVisibility(View.VISIBLE);
+        // 移除全屏容器
+        ViewGroup rootView = (ViewGroup) findViewById(android.R.id.content);
+        if (fullscreenContainer != null) {
+            rootView.removeView(fullscreenContainer);
+            fullscreenContainer.removeView(customView);
+        }
+        // 恢复系统UI
+        getWindow().getDecorView().setSystemUiVisibility(View.SYSTEM_UI_FLAG_VISIBLE);
+        // 清理
+        customView = null;
+        if (customViewCallback != null) {
+            customViewCallback.onCustomViewHidden();
+            customViewCallback = null;
+        }
     }
 
     @Deprecated
